@@ -14,7 +14,6 @@ import pandas as pd
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from backend.config.config import config
-from backend.data_fetcher.sectors_fetcher import SectorsFetcher
 from backend.data_fetcher.twelve_data_fetcher import TwelveDataFetcher
 from backend.analysis.technical_indicators import TechnicalIndicators
 from backend.analysis.fundamental_analysis import FundamentalAnalysis
@@ -36,14 +35,15 @@ app.add_middleware(
 )
 
 # Initialize data fetchers
-sectors_fetcher = None
+# Using Twelve Data as primary (free tier: 800 calls/day)
+# Sectors.app removed due to paid requirement
 twelve_data_fetcher = None
-
-if config.SECTORS_API_KEY:
-    sectors_fetcher = SectorsFetcher(config.SECTORS_API_KEY)
 
 if config.TWELVEDATA_API_KEY:
     twelve_data_fetcher = TwelveDataFetcher(config.TWELVEDATA_API_KEY)
+
+# Primary fetcher is now Twelve Data
+primary_fetcher = twelve_data_fetcher
 
 
 @app.on_event("startup")
@@ -51,8 +51,9 @@ async def startup_event():
     """Initialize on startup"""
     print("🚀 Stock Analysis API Starting...")
     print(f"📊 Environment: {config.APP_ENV}")
-    print(f"🔑 Sectors.app API: {'✓' if sectors_fetcher else '✗'}")
-    print(f"🔑 Twelve Data API: {'✓' if twelve_data_fetcher else '✗'}")
+    print(f"🔑 Twelve Data API: {'✓ Configured' if twelve_data_fetcher else '✗ Not configured'}")
+    if not twelve_data_fetcher:
+        print("⚠️  Warning: No API key configured! Please set TWELVEDATA_API_KEY in .env")
 
 
 @app.get("/")
@@ -72,7 +73,6 @@ async def health_check():
     return {
         "status": "healthy",
         "services": {
-            "sectors_api": sectors_fetcher is not None,
             "twelve_data_api": twelve_data_fetcher is not None
         }
     }
@@ -89,11 +89,11 @@ async def search_stocks(q: str = Query(..., min_length=1)):
     Returns:
         List of matching stocks
     """
-    if not sectors_fetcher:
-        raise HTTPException(status_code=503, detail="Sectors API not configured")
+    if not primary_fetcher:
+        raise HTTPException(status_code=503, detail="No API configured. Please set TWELVEDATA_API_KEY in .env")
     
     try:
-        results = sectors_fetcher.search_stocks(q)
+        results = primary_fetcher.search_stocks(q)
         return {"results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -102,11 +102,11 @@ async def search_stocks(q: str = Query(..., min_length=1)):
 @app.get("/api/stocks/all")
 async def get_all_stocks():
     """Get list of all available stocks"""
-    if not sectors_fetcher:
-        raise HTTPException(status_code=503, detail="Sectors API not configured")
+    if not primary_fetcher:
+        raise HTTPException(status_code=503, detail="No API configured. Please set TWELVEDATA_API_KEY in .env")
     
     try:
-        stocks = sectors_fetcher.get_all_stocks()
+        stocks = primary_fetcher.get_all_stocks()
         return {"stocks": stocks}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -131,7 +131,7 @@ async def get_stock_data(
     Returns:
         Stock price data
     """
-    fetcher = sectors_fetcher or twelve_data_fetcher
+    fetcher = primary_fetcher
     
     if not fetcher:
         raise HTTPException(status_code=503, detail="No data source configured")
@@ -177,7 +177,7 @@ async def get_company_info(symbol: str):
     Returns:
         Company details
     """
-    fetcher = sectors_fetcher or twelve_data_fetcher
+    fetcher = primary_fetcher
     
     if not fetcher:
         raise HTTPException(status_code=503, detail="No data source configured")
@@ -214,7 +214,7 @@ async def get_technical_analysis(
     Returns:
         Price data with technical indicators
     """
-    fetcher = sectors_fetcher or twelve_data_fetcher
+    fetcher = primary_fetcher
     
     if not fetcher:
         raise HTTPException(status_code=503, detail="No data source configured")
@@ -233,24 +233,47 @@ async def get_technical_analysis(
         # Calculate indicators
         df_with_indicators = TechnicalIndicators.calculate_all(df)
         
+        # Replace NaN/Inf with None for JSON compatibility
+        df_with_indicators = df_with_indicators.replace([float('inf'), float('-inf')], None)
+        df_with_indicators = df_with_indicators.where(pd.notnull(df_with_indicators), None)
+        
         # Convert to records
         data = df_with_indicators.to_dict('records')
         
-        # Convert timestamps
+        # Convert timestamps and clean NaN values
         for record in data:
             if 'timestamp' in record:
-                record['timestamp'] = record['timestamp'].isoformat()
+                try:
+                    record['timestamp'] = record['timestamp'].isoformat()
+                except:
+                    record['timestamp'] = str(record['timestamp'])
+            # Clean any remaining NaN values
+            for key, value in record.items():
+                if isinstance(value, float) and (pd.isna(value) or value != value):
+                    record[key] = None
         
         # Get latest values for summary
         latest = df_with_indicators.iloc[-1]
         
+        def safe_float(val):
+            """Convert to float safely, return None for NaN/Inf"""
+            if val is None or pd.isna(val):
+                return None
+            try:
+                f = float(val)
+                if f != f or f == float('inf') or f == float('-inf'):
+                    return None
+                return f
+            except:
+                return None
+        
         summary = {
-            'price': float(latest['close']),
-            'rsi': float(latest['rsi']) if not pd.isna(latest['rsi']) else None,
-            'macd': float(latest['macd']) if not pd.isna(latest['macd']) else None,
-            'macd_signal': float(latest['macd_signal']) if not pd.isna(latest['macd_signal']) else None,
-            'sma_20': float(latest['sma_20']) if not pd.isna(latest['sma_20']) else None,
-            'sma_50': float(latest['sma_50']) if not pd.isna(latest['sma_50']) else None,
+            'price': safe_float(latest.get('close')),
+            'rsi': safe_float(latest.get('rsi')),
+            'macd': safe_float(latest.get('macd')),
+            'macd_signal': safe_float(latest.get('macd_signal')),
+            'sma_20': safe_float(latest.get('sma_20')),
+            'sma_50': safe_float(latest.get('sma_50')),
         }
         
         return {
@@ -275,23 +298,24 @@ async def get_fundamental_analysis(symbol: str):
     Returns:
         Fundamental ratios and analysis
     """
-    if not sectors_fetcher:
-        raise HTTPException(status_code=503, detail="Sectors API required for fundamentals")
+    if not primary_fetcher:
+        raise HTTPException(status_code=503, detail="No API configured")
     
     try:
-        # Get financials
-        financials = sectors_fetcher.get_financials(symbol.upper())
+        # Get financials (limited in free tier)
+        financials = primary_fetcher.get_financials(symbol.upper())
         
         if not financials:
             raise HTTPException(status_code=404, detail="Financial data not found")
         
-        # Perform analysis
+        # Perform analysis (will be limited with free tier data)
         analysis = FundamentalAnalysis.analyze_company(financials)
         
         return {
             "symbol": symbol.upper(),
             "analysis": analysis,
-            "raw_data": financials
+            "raw_data": financials,
+            "note": "Full fundamental data requires premium API subscription"
         }
     except HTTPException:
         raise

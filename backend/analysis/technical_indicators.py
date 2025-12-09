@@ -292,6 +292,10 @@ class TechnicalIndicators:
             result[f'sma_{period}'] = TechnicalIndicators.sma(result['close'], period)
             result[f'ema_{period}'] = TechnicalIndicators.ema(result['close'], period)
         
+        # EMA 12 and 26 for MACD and chart display
+        result['ema_12'] = TechnicalIndicators.ema(result['close'], 12)
+        result['ema_26'] = TechnicalIndicators.ema(result['close'], 26)
+        
         # RSI
         result['rsi'] = TechnicalIndicators.rsi(result['close'])
         

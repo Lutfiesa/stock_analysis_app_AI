@@ -20,8 +20,59 @@ class StockAnalysisApp {
         this.setupTheme();
         this.setupNavigation();
         this.setupSearch();
+        this.updateMarketStatus();
         this.loadDashboard();
         this.setupAnalysisPage();
+
+        // Update market status every minute
+        setInterval(() => this.updateMarketStatus(), 60000);
+    }
+
+    // Market Status based on IDX trading hours
+    updateMarketStatus() {
+        const statusEl = document.getElementById('marketStatus');
+        if (!statusEl) return;
+
+        const now = new Date();
+        // Convert to WIB (UTC+7)
+        const wibOffset = 7 * 60; // minutes
+        const utcOffset = now.getTimezoneOffset();
+        const wibTime = new Date(now.getTime() + (wibOffset + utcOffset) * 60000);
+
+        const day = wibTime.getDay(); // 0 = Sunday, 6 = Saturday
+        const hour = wibTime.getHours();
+        const minute = wibTime.getMinutes();
+        const timeInMinutes = hour * 60 + minute;
+
+        // IDX Trading hours: Monday-Friday, 09:00-16:00 WIB
+        // Pre-opening: 08:45-09:00
+        // Session 1: 09:00-12:00 (lunch break 12:00-13:30)
+        // Session 2: 13:30-16:00
+
+        const isWeekday = day >= 1 && day <= 5;
+        const isPreOpening = timeInMinutes >= 525 && timeInMinutes < 540; // 08:45-09:00
+        const isSession1 = timeInMinutes >= 540 && timeInMinutes < 720; // 09:00-12:00
+        const isLunchBreak = timeInMinutes >= 720 && timeInMinutes < 810; // 12:00-13:30
+        const isSession2 = timeInMinutes >= 810 && timeInMinutes < 960; // 13:30-16:00
+
+        let status = 'Closed';
+        let statusClass = 'closed';
+
+        if (isWeekday) {
+            if (isPreOpening) {
+                status = 'Pre-Opening';
+                statusClass = 'pre-opening';
+            } else if (isSession1 || isSession2) {
+                status = 'Open';
+                statusClass = 'open';
+            } else if (isLunchBreak) {
+                status = 'Lunch Break';
+                statusClass = 'break';
+            }
+        }
+
+        statusEl.textContent = status;
+        statusEl.className = 'stat-value market-' + statusClass;
     }
 
     // Theme Management
@@ -199,6 +250,13 @@ class StockAnalysisApp {
         const analyzeBtn = document.getElementById('analyzeBtn');
         const symbolInput = document.getElementById('analysisSymbol');
 
+        // Store current analysis settings
+        this.currentSymbol = '';
+        this.currentInterval = '1d';
+        this.showSMA = true;
+        this.showEMA = false;
+        this.showBB = false;
+
         analyzeBtn.addEventListener('click', async () => {
             const symbol = symbolInput.value.trim().toUpperCase();
 
@@ -207,7 +265,8 @@ class StockAnalysisApp {
                 return;
             }
 
-            await this.analyzeStock(symbol);
+            this.currentSymbol = symbol;
+            await this.analyzeStock(symbol, this.currentInterval);
         });
 
         // Enter key to analyze
@@ -216,9 +275,69 @@ class StockAnalysisApp {
                 analyzeBtn.click();
             }
         });
+
+        // Timeframe buttons
+        const timeframeButtons = document.querySelectorAll('.timeframe-buttons .btn');
+        timeframeButtons.forEach(btn => {
+            btn.addEventListener('click', async () => {
+                // Update active state
+                timeframeButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Map button text to interval
+                const intervalMap = {
+                    '1D': '1d',
+                    '1W': '1d',  // Week of daily data
+                    '1M': '1d',  // Month of daily data
+                    '3M': '1d',  // 3 months of daily data
+                    '1Y': '1d',  // Year of daily data
+                };
+
+                const buttonText = btn.textContent.trim();
+                this.currentInterval = intervalMap[buttonText] || '1d';
+                this.currentTimeframe = buttonText;
+
+                // Re-analyze if symbol is set
+                if (this.currentSymbol) {
+                    await this.analyzeStock(this.currentSymbol, this.currentInterval, buttonText);
+                }
+            });
+        });
+
+        // Indicator toggles
+        const toggleSMA = document.getElementById('toggleSMA');
+        const toggleEMA = document.getElementById('toggleEMA');
+        const toggleBB = document.getElementById('toggleBB');
+
+        if (toggleSMA) {
+            toggleSMA.addEventListener('change', () => {
+                this.showSMA = toggleSMA.checked;
+                if (this.currentChartData) {
+                    this.renderChart(this.currentChartData);
+                }
+            });
+        }
+
+        if (toggleEMA) {
+            toggleEMA.addEventListener('change', () => {
+                this.showEMA = toggleEMA.checked;
+                if (this.currentChartData) {
+                    this.renderChart(this.currentChartData);
+                }
+            });
+        }
+
+        if (toggleBB) {
+            toggleBB.addEventListener('change', () => {
+                this.showBB = toggleBB.checked;
+                if (this.currentChartData) {
+                    this.renderChart(this.currentChartData);
+                }
+            });
+        }
     }
 
-    async analyzeStock(symbol) {
+    async analyzeStock(symbol, interval = '1d', timeframe = '1Y') {
         const chartContainer = document.getElementById('chartContainer');
         const indicatorsList = document.getElementById('indicatorsList');
 
@@ -227,8 +346,39 @@ class StockAnalysisApp {
         indicatorsList.innerHTML = '<div class="loading">Loading indicators...</div>';
 
         try {
+            // Calculate date range based on timeframe
+            const endDate = new Date();
+            let startDate = new Date();
+
+            switch (timeframe) {
+                case '1D':
+                    startDate.setDate(endDate.getDate() - 1);
+                    break;
+                case '1W':
+                    startDate.setDate(endDate.getDate() - 7);
+                    break;
+                case '1M':
+                    startDate.setMonth(endDate.getMonth() - 1);
+                    break;
+                case '3M':
+                    startDate.setMonth(endDate.getMonth() - 3);
+                    break;
+                case '1Y':
+                default:
+                    startDate.setFullYear(endDate.getFullYear() - 1);
+                    break;
+            }
+
             // Fetch technical analysis data
-            const data = await this.api.getTechnicalAnalysis(symbol);
+            const data = await this.api.getTechnicalAnalysis(
+                symbol,
+                interval,
+                startDate.toISOString().split('T')[0],
+                endDate.toISOString().split('T')[0]
+            );
+
+            // Store for re-rendering with different indicator settings
+            this.currentChartData = data;
 
             // Display chart
             this.renderChart(data);
@@ -251,18 +401,341 @@ class StockAnalysisApp {
     renderChart(data) {
         const chartContainer = document.getElementById('chartContainer');
 
-        // For now, display a simple chart placeholder
-        // In a full implementation, we would use TradingView Lightweight Charts
-        chartContainer.innerHTML = `
-      <div style="padding: 2rem; text-align: center;">
-        <h3>${data.symbol} Price Chart</h3>
-        <p class="text-muted">Chart will be rendered with TradingView Lightweight Charts library</p>
-        <p style="font-size: 2rem; margin: 2rem 0;">
-          <strong>Current: Rp ${data.summary.price?.toFixed(2) || 'N/A'}</strong>
-        </p>
-        <p class="text-muted">Data points: ${data.data?.length || 0}</p>
-      </div>
-    `;
+        // Clear container
+        chartContainer.innerHTML = '';
+
+        // Check if we have data
+        if (!data.data || data.data.length === 0) {
+            chartContainer.innerHTML = `
+                <div class="empty-state">
+                    <p>📊 No chart data available for ${data.symbol}</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Create chart using TradingView Lightweight Charts
+        const chart = LightweightCharts.createChart(chartContainer, {
+            width: chartContainer.clientWidth,
+            height: 500,
+            layout: {
+                background: { type: 'solid', color: 'transparent' },
+                textColor: getComputedStyle(document.documentElement).getPropertyValue('--color-text-primary').trim() || '#333',
+            },
+            grid: {
+                vertLines: { color: 'rgba(128, 128, 128, 0.1)' },
+                horzLines: { color: 'rgba(128, 128, 128, 0.1)' },
+            },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+            },
+            rightPriceScale: {
+                borderColor: 'rgba(128, 128, 128, 0.3)',
+            },
+            timeScale: {
+                borderColor: 'rgba(128, 128, 128, 0.3)',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+        });
+
+        // Add candlestick series
+        const candlestickSeries = chart.addCandlestickSeries({
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderDownColor: '#ef5350',
+            borderUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+            wickUpColor: '#26a69a',
+        });
+
+        // Format data for candlestick chart
+        const candleData = data.data
+            .filter(d => d.open && d.high && d.low && d.close)
+            .map(d => {
+                // Parse timestamp
+                let time;
+                if (d.timestamp) {
+                    const date = new Date(d.timestamp);
+                    time = Math.floor(date.getTime() / 1000);
+                } else {
+                    time = Math.floor(Date.now() / 1000);
+                }
+
+                return {
+                    time: time,
+                    open: parseFloat(d.open),
+                    high: parseFloat(d.high),
+                    low: parseFloat(d.low),
+                    close: parseFloat(d.close),
+                };
+            })
+            .sort((a, b) => a.time - b.time);
+
+        // Set data
+        if (candleData.length > 0) {
+            candlestickSeries.setData(candleData);
+        }
+
+        // Add volume bars if available
+        if (data.data[0] && data.data[0].volume) {
+            const volumeSeries = chart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: {
+                    type: 'volume',
+                },
+                priceScaleId: '',
+                scaleMargins: {
+                    top: 0.8,
+                    bottom: 0,
+                },
+            });
+
+            const volumeData = data.data
+                .filter(d => d.volume)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+
+                    const open = parseFloat(d.open) || 0;
+                    const close = parseFloat(d.close) || 0;
+
+                    return {
+                        time: time,
+                        value: parseFloat(d.volume),
+                        color: close >= open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (volumeData.length > 0) {
+                volumeSeries.setData(volumeData);
+            }
+        }
+
+        // Add SMA lines if available and enabled
+        if (this.showSMA && data.data[0] && data.data[0].sma_20) {
+            const sma20Series = chart.addLineSeries({
+                color: '#2196F3',
+                lineWidth: 2,
+                title: 'SMA 20',
+            });
+
+            const sma20Data = data.data
+                .filter(d => d.sma_20 != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.sma_20),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (sma20Data.length > 0) {
+                sma20Series.setData(sma20Data);
+            }
+        }
+
+        if (this.showSMA && data.data[0] && data.data[0].sma_50) {
+            const sma50Series = chart.addLineSeries({
+                color: '#FF9800',
+                lineWidth: 2,
+                title: 'SMA 50',
+            });
+
+            const sma50Data = data.data
+                .filter(d => d.sma_50 != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.sma_50),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (sma50Data.length > 0) {
+                sma50Series.setData(sma50Data);
+            }
+        }
+
+        // Add EMA lines if enabled
+        if (this.showEMA && data.data[0] && data.data[0].ema_12) {
+            const ema12Series = chart.addLineSeries({
+                color: '#9C27B0',
+                lineWidth: 2,
+                title: 'EMA 12',
+            });
+
+            const ema12Data = data.data
+                .filter(d => d.ema_12 != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.ema_12),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (ema12Data.length > 0) {
+                ema12Series.setData(ema12Data);
+            }
+        }
+
+        if (this.showEMA && data.data[0] && data.data[0].ema_26) {
+            const ema26Series = chart.addLineSeries({
+                color: '#E91E63',
+                lineWidth: 2,
+                title: 'EMA 26',
+            });
+
+            const ema26Data = data.data
+                .filter(d => d.ema_26 != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.ema_26),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (ema26Data.length > 0) {
+                ema26Series.setData(ema26Data);
+            }
+        }
+
+        // Add Bollinger Bands if enabled
+        if (this.showBB && data.data[0] && data.data[0].bb_upper) {
+            // Upper band
+            const bbUpperSeries = chart.addLineSeries({
+                color: 'rgba(33, 150, 243, 0.5)',
+                lineWidth: 1,
+                title: 'BB Upper',
+            });
+
+            const bbUpperData = data.data
+                .filter(d => d.bb_upper != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.bb_upper),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (bbUpperData.length > 0) {
+                bbUpperSeries.setData(bbUpperData);
+            }
+
+            // Middle band (SMA 20)
+            const bbMiddleSeries = chart.addLineSeries({
+                color: 'rgba(33, 150, 243, 0.8)',
+                lineWidth: 1,
+                title: 'BB Middle',
+            });
+
+            const bbMiddleData = data.data
+                .filter(d => d.bb_middle != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.bb_middle),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (bbMiddleData.length > 0) {
+                bbMiddleSeries.setData(bbMiddleData);
+            }
+
+            // Lower band
+            const bbLowerSeries = chart.addLineSeries({
+                color: 'rgba(33, 150, 243, 0.5)',
+                lineWidth: 1,
+                title: 'BB Lower',
+            });
+
+            const bbLowerData = data.data
+                .filter(d => d.bb_lower != null)
+                .map(d => {
+                    let time;
+                    if (d.timestamp) {
+                        const date = new Date(d.timestamp);
+                        time = Math.floor(date.getTime() / 1000);
+                    } else {
+                        time = Math.floor(Date.now() / 1000);
+                    }
+                    return {
+                        time: time,
+                        value: parseFloat(d.bb_lower),
+                    };
+                })
+                .sort((a, b) => a.time - b.time);
+
+            if (bbLowerData.length > 0) {
+                bbLowerSeries.setData(bbLowerData);
+            }
+        }
+
+        // Fit content
+        chart.timeScale().fitContent();
+
+        // Handle resize
+        const resizeObserver = new ResizeObserver(entries => {
+            const { width, height } = entries[0].contentRect;
+            chart.applyOptions({ width, height: 500 });
+        });
+        resizeObserver.observe(chartContainer);
+
+        // Store chart reference for cleanup
+        this.currentChart = chart;
+        this.resizeObserver = resizeObserver;
     }
 
     displayIndicators(summary) {

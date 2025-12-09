@@ -231,6 +231,35 @@
     background-clip: text;
 }
 
+/* Market Status Colors */
+.market-open {
+    background: linear-gradient(135deg, var(--color-success), #2ecc71) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+
+.market-closed {
+    background: linear-gradient(135deg, var(--color-danger), #c0392b) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+
+.market-pre-opening {
+    background: linear-gradient(135deg, var(--color-warning), #f39c12) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+
+.market-break {
+    background: linear-gradient(135deg, #9b59b6, #8e44ad) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+}
+
 /* ============================================
    GRIDS
    ============================================ */

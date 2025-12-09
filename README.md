@@ -97,6 +97,7 @@ Aplikasi analisis saham lengkap untuk **Bursa Efek Indonesia (IDX)** dengan fitu
 
 ## 📚 Documentation
 
+- **[Python Setup Guide](PYTHON_SETUP.md)** - ⚡ Quick start & environment setup
 - [Setup Guide](docs/SETUP.md) - Panduan instalasi lengkap
 - [API Reference](docs/API_REFERENCE.md) - Dokumentasi API endpoints
 - [Tutorial: Technical Analysis](docs/tutorials/01_technical_analysis.md)
