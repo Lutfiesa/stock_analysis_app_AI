@@ -1,0 +1,18 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pandas==2.1.4
+numpy==1.26.3
+requests==2.31.0
+python-dotenv==1.0.0
+sqlalchemy==2.0.25
+aiosqlite==0.19.0
+pydantic==2.5.3
+python-multipart==0.0.6
+websockets==12.0
+httpx==0.26.0
+pytz==2023.3.post1
+
+# Optional: TA-Lib for advanced technical indicators
+# Note: Requires manual installation on Windows
+# Download wheel from: https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
+# TA-Lib==0.4.28
